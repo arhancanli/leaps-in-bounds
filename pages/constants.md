@@ -12,6 +12,7 @@ permalink: /constants/
   <b class="verified-equal">Green</b> matches the best bound in the literature,
   <b class="verified-new">purple</b> is stronger than (or absent from) it,
   and <b class="verified-weaker">gray</b> is weaker.
+  See the <a href="{{ site.baseurl }}/unverified/">bounds that no certificate matches yet</a>.
 </p>
 
 <div class="dropdown mb-4">

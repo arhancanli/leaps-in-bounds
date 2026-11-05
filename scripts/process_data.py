@@ -5,6 +5,7 @@
 3. Find most recent updates for each constant's bounds or exact value.
 4. Attach certificates and find verified bounds.
 5. Combine literature and verified bounds into the best bounds.
+   List the literature bounds that no certificate matches yet.
 6. Process images for constants.
 7. Add statistics to each constant group.
 """
@@ -266,6 +267,44 @@ def combine_bounds(constants: dict[str, dict[str, Any]]) -> None:
             constant["exact_value"] = lower
 
 
+def find_unverified_bounds(constants: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """List the literature bounds that no certificate matches yet, for
+    constants in families that accept certificates.
+
+    Each entry says whether a witness can certify that bound or it needs a
+    Lean proof, and which source gave the literature bound. Call after
+    combine_bounds, before the values are written out.
+    """
+    unverified = []
+    for constant_id, constant in constants.items():
+        if not constant["certifiable"]:
+            continue
+        family = FAMILIES[constant["group"]]
+        for side in ["lower", "upper"]:
+            literature = constant[f"literature_{side}_bound"]
+            verified = constant[f"verified_{side}_bound"]
+            if literature is None or literature.decimal_approx is None:
+                continue
+            if verified is not None and not is_better(side, literature.decimal_approx, verified.decimal_approx):
+                continue
+            update = next(
+                (u for u in reversed(constant["updates"])
+                 if u["type"] == f"{side}_bound" and u["value"]["latex"] == literature.latex),
+                None,
+            )
+            unverified.append({
+                "constant": constant_id,
+                "group": constant["group"],
+                "bound": side,
+                "literature": literature.to_dict(),
+                "verified": verified.to_dict() if verified is not None else None,
+                "verified_certificate": constant[f"verified_{side}_certificate"],
+                "evidence": "witness" if family.witness_bound == side else "lean",
+                "source": update and (update.get("primary_source") or update.get("secondary_source")),
+            })
+    return unverified
+
+
 def calculate_group_stats(
     group_id: str,
     constants: Mapping[str, Mapping[str, Any]],
@@ -385,6 +424,9 @@ def main() -> None:
     certificates = load_certificates()
     assign_certificates(constants, certificates)
     combine_bounds(constants)
+    unverified = find_unverified_bounds(constants)
+    with open("_data/unverified_bounds.yml", "w") as file:
+        yaml.dump(unverified, file, sort_keys=False)
 
     # Save combined updates for download
     for update in updates:

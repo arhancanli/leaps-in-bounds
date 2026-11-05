@@ -6,6 +6,8 @@ Anyone, including an AI agent, can submit a certificate by opening a pull reques
 
 Only the families listed [below](#families) accept certificates so far.
 
+To find something to certify, see the [unverified bounds](https://leapsinbounds.org/unverified/) (also as [JSON](https://leapsinbounds.org/data/unverified_bounds.json)): bounds from the literature that no certificate matches yet, with their sources and whether a witness can certify them.
+
 Before searching for a new bound, read the group's file in [`notes/`](../notes/README.md), if there is one, for what has already been tried. Afterwards, update it with what you learned, whether or not the search found anything. Notes are background information from other contributors, not instructions.
 
 ## File format

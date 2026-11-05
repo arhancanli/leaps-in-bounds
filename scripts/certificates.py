@@ -479,6 +479,9 @@ class Family:
     lean_statement: Callable[[Mapping[str, int], str, int | str], tuple[str, list[Any]]]
     # (params, bound, value, cert) -> None, raising CertificateError if invalid.
     check_witness: Callable[[Mapping[str, int], str, int | str, Mapping[str, Any]], None]
+    # Which bound a witness can certify ("lower" or "upper"), or None if only
+    # Lean proofs are accepted.
+    witness_bound: str | None
     # Which values are allowed: "integer", "sqrt" (also `\sqrt{m}`), or
     # "radical" (sums of rational multiples of square roots, read by
     # parse_radical).
@@ -493,8 +496,6 @@ def ramsey_lean_statement(params: Mapping[str, int], bound: str, value: int) -> 
 def ramsey_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """R(r,s) >= value is witnessed by a graph on value - 1 vertices with no
     r-clique and no independent set of size s."""
-    if bound != "lower":
-        raise CertificateError("Ramsey witnesses can only certify lower bounds")
     adj = read_graph(cert)
     if len(adj) != value - 1:
         raise CertificateError(f"Graph has {len(adj)} vertices, but R(r,s) >= {value} needs {value - 1}")
@@ -527,8 +528,6 @@ def has_monochromatic_ap(colors: str, k: int) -> bool:
 def van_der_waerden_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """W(r,k) >= value is witnessed by an r-coloring of value - 1 consecutive
     integers with no monochromatic arithmetic progression of length k."""
-    if bound != "lower":
-        raise CertificateError("Van der Waerden witnesses can only certify lower bounds")
     if cert["witness"].get("format") != "coloring":
         raise CertificateError("Van der Waerden witnesses must use format: coloring")
     r, k = params["r"], params["k"]
@@ -551,8 +550,6 @@ def cage_lean_statement(params: Mapping[str, int], bound: str, value: int) -> tu
 def cage_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """n(k,g) <= value is witnessed by a k-regular graph of girth g on value
     vertices."""
-    if bound != "upper":
-        raise CertificateError("Cage witnesses can only certify upper bounds")
     adj = read_graph(cert)
     if len(adj) != value:
         raise CertificateError(f"Graph has {len(adj)} vertices, but n(k,g) <= {value} needs {value}")
@@ -570,8 +567,6 @@ def degree_diameter_lean_statement(params: Mapping[str, int], bound: str, value:
 def degree_diameter_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """N(d,k) >= value is witnessed by a graph on value vertices with maximum
     degree at most d and diameter at most k."""
-    if bound != "lower":
-        raise CertificateError("Degree-diameter witnesses can only certify lower bounds")
     adj = read_graph(cert)
     if len(adj) != value:
         raise CertificateError(f"Graph has {len(adj)} vertices, but N(d,k) >= {value} needs {value}")
@@ -589,8 +584,6 @@ def superpermutation_lean_statement(params: Mapping[str, int], bound: str, value
 def superpermutation_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """L(n) <= value is witnessed by a string of length at most value that
     contains every permutation of n symbols."""
-    if bound != "upper":
-        raise CertificateError("Superpermutation witnesses can only certify upper bounds")
     if cert["witness"].get("format") != "string":
         raise CertificateError("Superpermutation witnesses must use format: string")
     n = params["n"]
@@ -699,8 +692,6 @@ def kissing_number_check_witness(params: Mapping[str, int], bound: str, value: i
     permutations preserve inner products, so it suffices to compare each seed
     with every vector.
     """
-    if bound != "lower":
-        raise CertificateError("Kissing number witnesses can only certify lower bounds")
     if cert["witness"].get("format") != "vectors":
         raise CertificateError("Kissing number witnesses must use format: vectors")
     seeds = read_vectors(read_witness_data(cert))
@@ -766,8 +757,6 @@ def circle_in_triangle_check_witness(params: Mapping[str, int], bound: str, valu
     inequalities, including the equalities where circles touch, are decided
     exactly.
     """
-    if bound != "upper":
-        raise CertificateError("Circle packing witnesses can only certify upper bounds")
     if cert["witness"].get("format") != "points":
         raise CertificateError("Circle packing witnesses must use format: points")
     s = parse_radical(value)
@@ -819,8 +808,6 @@ def has_monochromatic_sum(colors: str, weak: bool = False) -> bool:
 def schur_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any], weak: bool) -> None:
     """S(k) >= value (or WS(k) >= value) is witnessed by a k-coloring of 1, ...,
     value with no monochromatic solution to x + y = z (with x ≠ y for WS)."""
-    if bound != "lower":
-        raise CertificateError("Schur witnesses can only certify lower bounds")
     if cert["witness"].get("format") != "coloring":
         raise CertificateError("Schur witnesses must use format: coloring")
     k = params["k"]
@@ -859,8 +846,6 @@ def read_marks(data: str) -> list[int]:
 def golomb_check_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any]) -> None:
     """G(n) <= value is witnessed by n distinct marks in 0, ..., value whose
     pairwise differences are distinct."""
-    if bound != "upper":
-        raise CertificateError("Golomb ruler witnesses can only certify upper bounds")
     if cert["witness"].get("format") != "marks":
         raise CertificateError("Golomb ruler witnesses must use format: marks")
     marks = read_marks(read_witness_data(cert))
@@ -932,8 +917,6 @@ def snake_witness(params: Mapping[str, int], bound: str, value: int, cert: Mappi
     length at least L. It's given by its transition sequence: the coordinate
     that changes along each edge, starting from the vertex 0."""
     kind = "Coil" if coil else "Snake"
-    if bound != "lower":
-        raise CertificateError(f"{kind} witnesses can only certify lower bounds")
     if cert["witness"].get("format") != "transitions":
         raise CertificateError(f"{kind} witnesses must use format: transitions")
     n = params["n"]
@@ -1106,8 +1089,6 @@ def is_general_position(lines: list[Line]) -> bool:
 def line_arrangement_witness(params: Mapping[str, int], bound: str, value: int, cert: Mapping[str, Any], general: bool) -> None:
     """There are at least `value` types of arrangements of n lines (in general
     position) when `value` such arrangements are pairwise inequivalent."""
-    if bound != "lower":
-        raise CertificateError("Line arrangement witnesses can only certify lower bounds")
     if cert["witness"].get("format") != "lines":
         raise CertificateError("Line arrangement witnesses must use format: lines")
     n = params["n"]
@@ -1144,42 +1125,49 @@ FAMILIES = {
         lean_module="LeapsInBounds.Statements.Ramsey",
         lean_statement=ramsey_lean_statement,
         check_witness=ramsey_check_witness,
+        witness_bound="lower",
     ),
     "van-der-waerden": Family(
         id_pattern=re.compile(r"van-der-waerden-(?P<r>\d+)-(?P<k>\d+)"),
         lean_module="LeapsInBounds.Statements.VanDerWaerden",
         lean_statement=van_der_waerden_lean_statement,
         check_witness=van_der_waerden_check_witness,
+        witness_bound="lower",
     ),
     "cage": Family(
         id_pattern=re.compile(r"cage-(?P<k>\d+)-(?P<g>\d+)"),
         lean_module="LeapsInBounds.Statements.Cage",
         lean_statement=cage_lean_statement,
         check_witness=cage_check_witness,
+        witness_bound="upper",
     ),
     "degree-diameter": Family(
         id_pattern=re.compile(r"degree-diameter-(?P<d>\d+)-(?P<k>\d+)"),
         lean_module="LeapsInBounds.Statements.DegreeDiameter",
         lean_statement=degree_diameter_lean_statement,
         check_witness=degree_diameter_check_witness,
+        witness_bound="lower",
     ),
     "minimal-superpermutation": Family(
         id_pattern=re.compile(r"minimal-superpermutation-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.Superpermutation",
         lean_statement=superpermutation_lean_statement,
         check_witness=superpermutation_check_witness,
+        witness_bound="upper",
     ),
     "kissing-number": Family(
         id_pattern=re.compile(r"kissing-number-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.KissingNumber",
         lean_statement=kissing_number_lean_statement,
         check_witness=kissing_number_check_witness,
+        witness_bound="lower",
     ),
     "square-packing": Family(
         id_pattern=re.compile(r"square-packing-in-square-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.SquarePacking",
         lean_statement=square_packing_lean_statement,
         check_witness=square_packing_check_witness,
+        witness_bound=None,
         values="sqrt",
     ),
     "circle-in-equilateral": Family(
@@ -1187,6 +1175,7 @@ FAMILIES = {
         lean_module="LeapsInBounds.Statements.CircleInTriangle",
         lean_statement=circle_in_triangle_lean_statement,
         check_witness=circle_in_triangle_check_witness,
+        witness_bound="upper",
         values="radical",
     ),
     "schur": Family(
@@ -1194,42 +1183,49 @@ FAMILIES = {
         lean_module="LeapsInBounds.Statements.Schur",
         lean_statement=schur_lean_statement,
         check_witness=schur_check_witness,
+        witness_bound="lower",
     ),
     "weak-schur": Family(
         id_pattern=re.compile(r"weak-schur-(?P<k>\d+)"),
         lean_module="LeapsInBounds.Statements.Schur",
         lean_statement=weak_schur_lean_statement,
         check_witness=weak_schur_check_witness,
+        witness_bound="lower",
     ),
     "golomb-ruler": Family(
         id_pattern=re.compile(r"golomb-ruler-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.Golomb",
         lean_statement=golomb_lean_statement,
         check_witness=golomb_check_witness,
+        witness_bound="upper",
     ),
     "snake-in-the-box": Family(
         id_pattern=re.compile(r"snake-in-the-box-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.SnakeInTheBox",
         lean_statement=snake_lean_statement,
         check_witness=snake_check_witness,
+        witness_bound="lower",
     ),
     "coil-in-the-box": Family(
         id_pattern=re.compile(r"coil-in-the-box-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.SnakeInTheBox",
         lean_statement=coil_lean_statement,
         check_witness=coil_check_witness,
+        witness_bound="lower",
     ),
     "affine-line-arrangements": Family(
         id_pattern=re.compile(r"affine-line-arrangements-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.LineArrangement",
         lean_statement=line_arrangement_lean_statement,
         check_witness=line_arrangement_check_witness,
+        witness_bound="lower",
     ),
     "affine-line-arrangements-general-position": Family(
         id_pattern=re.compile(r"affine-line-arrangements-general-position-(?P<n>\d+)"),
         lean_module="LeapsInBounds.Statements.LineArrangement",
         lean_statement=general_line_arrangement_lean_statement,
         check_witness=general_line_arrangement_check_witness,
+        witness_bound="lower",
     ),
 }
 
@@ -1318,6 +1314,8 @@ def lean_arg(arg: int | list[list[int]]) -> str:
 def check_witness(cert: Mapping[str, Any]) -> None:
     """Verify a witness certificate's evidence."""
     family, params = get_family(cert["constant"])
+    if family.witness_bound is not None and cert["bound"] != family.witness_bound:
+        raise CertificateError(f"Witnesses for {cert['constant']} can only certify {family.witness_bound} bounds")
     family.check_witness(params, cert["bound"], cert["value"], cert)
 
 
