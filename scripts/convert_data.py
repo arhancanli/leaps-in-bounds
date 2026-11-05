@@ -26,6 +26,9 @@ with open("_data/sources.yml", "r") as file:
 with open("_data/updates.yml", "r") as file:
     updates = yaml.safe_load(file)
 
+with open("_data/unverified_bounds.yml", "r") as file:
+    unverified = yaml.safe_load(file)
+
 # Remove extraneous fields
 for constant in constants.values():
     if 'image' in constant:
@@ -53,6 +56,9 @@ with open("data/sources.yml", "w") as f:
 with open("data/updates.yml", "w") as f:
     yaml.dump(updates, f, sort_keys=False)
 
+with open("data/unverified_bounds.yml", "w") as f:
+    yaml.dump(unverified, f, sort_keys=False)
+
 # Export nested data structures to JSON
 with open("data/constants.json", "w") as f:
     json.dump(constants, f, indent=2)
@@ -65,6 +71,9 @@ with open("data/sources.json", "w") as f:
 
 with open("data/updates.json", "w") as f:
     json.dump(updates, f, indent=2)
+
+with open("data/unverified_bounds.json", "w") as f:
+    json.dump(unverified, f, indent=2)
 
 # Convert constants to CSV and TSV
 constants_list = []
@@ -128,3 +137,15 @@ for update in updates:
 updates_df = pd.DataFrame(updates_list)
 updates_df.to_csv("data/updates.csv", index=False)
 updates_df.to_csv("data/updates.tsv", sep="\t", index=False)
+
+# Convert unverified bounds to CSV and TSV
+unverified_list = []
+for row in unverified:
+    row_dict = row.copy()
+    flatten_value_dict(row_dict, 'literature')
+    flatten_value_dict(row_dict, 'verified')
+    unverified_list.append(row_dict)
+
+unverified_df = pd.DataFrame(unverified_list)
+unverified_df.to_csv("data/unverified_bounds.csv", index=False)
+unverified_df.to_csv("data/unverified_bounds.tsv", sep="\t", index=False)
