@@ -9,9 +9,13 @@ in a secondary source:
 - lean: a Lean theorem in formal/ whose type is the family's formal statement
   of the bound.
 
-See certificates/README.md for the file format.
+A certificate is verified once a trusted verifier has run the checks here,
+as recorded in the manifest (certificates/verified.yml), or attested when its
+evidence was checked elsewhere with a published checker (see
+certificate_status). See certificates/README.md for the file format.
 """
 
+import hashlib
 import itertools
 import json
 import math
@@ -21,7 +25,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 import numpy as np
 import sympy
@@ -31,8 +35,25 @@ CERTIFICATES_DIR = pathlib.Path("certificates")
 FORMAL_DIR = pathlib.Path("formal")
 CHECK_LEAN_SCRIPT = pathlib.Path("scripts/check_lean.lean")
 
+MANIFEST_PATH = CERTIFICATES_DIR / "verified.yml"
+
 REQUIRED_FIELDS = ["constant", "bound", "value", "kind", "submitted_by", "date"]
 GITHUB_USERNAME = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}")
+
+# GitHub accounts whose verifications count. Only a maintainer adds to this.
+TRUSTED_VERIFIERS = ["daniel-munro"]
+# Fields of a certificate covered by its evidence hash
+HASHED_FIELDS = ["constant", "bound", "value", "kind", "witness", "lean"]
+MANIFEST_FIELDS = ["sha256", "checker", "verified_by", "date"]
+MANIFEST_HEADER = """\
+# Certificates whose evidence a trusted verifier has checked, keyed by
+# certificate ID. Written by scripts/verify_certificates.py; see
+# certificates/README.md. Each entry records the hash of the evidence that was
+# checked, the commit of the checkers used, who ran them, and when.
+"""
+ATTESTATION_FIELDS = ["by", "checker", "command"]
+PINNED_URL = re.compile(r"^https://\S*\b[0-9a-f]{40}\b")
+LEAN_IMPORT = re.compile(r"^import\s+(\S+)", re.MULTILINE)
 
 
 class CertificateError(Exception):
@@ -45,7 +66,7 @@ def load_certificates(certificates_dir: str | pathlib.Path = CERTIFICATES_DIR) -
     Only checks the structure of each file, not its evidence.
     """
     certificates = {}
-    for path in sorted(pathlib.Path(certificates_dir).glob("**/*.yml")):
+    for path in sorted(pathlib.Path(certificates_dir).glob("*/*.yml")):
         cert_id = path.stem
         if cert_id in certificates:
             raise CertificateError(f"Duplicate certificate ID: {cert_id}")
@@ -62,12 +83,115 @@ def load_certificates(certificates_dir: str | pathlib.Path = CERTIFICATES_DIR) -
             raise CertificateError(f"{path}: kind must be 'witness' or 'lean'")
         if cert["kind"] not in cert:
             raise CertificateError(f"{path}: kind is '{cert['kind']}' but there is no '{cert['kind']}' section")
+        if "attestation" in cert:
+            check_attestation(cert["attestation"], path)
         cert["approx"] = value_approx(cert["value"], path)
         cert["id"] = cert_id
         cert["path"] = str(path)
         cert["date"] = str(cert["date"])
         certificates[cert_id] = cert
     return certificates
+
+
+def check_attestation(attestation: Any, path: Any) -> None:
+    """Check the structure of a certificate's attestation: someone else's
+    claim to have checked the evidence with a published checker."""
+    if not isinstance(attestation, dict):
+        raise CertificateError(f"{path}: attestation must be a mapping")
+    missing = [field for field in ATTESTATION_FIELDS if not attestation.get(field)]
+    if missing:
+        raise CertificateError(f"{path}: attestation is missing fields {missing}")
+    extra = set(attestation) - set(ATTESTATION_FIELDS) - {"evidence", "notes"}
+    if extra:
+        raise CertificateError(f"{path}: attestation has unknown fields {sorted(extra)}")
+    for field in ["checker", "evidence"]:
+        if field in attestation and not PINNED_URL.search(str(attestation[field])):
+            raise CertificateError(
+                f"{path}: attestation {field} must be a URL pinned to a commit (a full 40-character hash)"
+            )
+
+
+############
+# Manifest #
+############
+
+# A certificate is verified when the manifest has an entry for it whose hash
+# matches its evidence, recorded by a trusted verifier who checked it with the
+# checkers here. CI only compares hashes, so it never runs the checks itself.
+# See certificates/README.md.
+
+def evidence_files(cert: Mapping[str, Any]) -> list[pathlib.Path]:
+    """The files holding a certificate's evidence, besides its YAML file:
+    a witness file, or a Lean proof module and the proof modules it imports."""
+    if cert["kind"] == "witness":
+        file = cert["witness"].get("file")
+        return [pathlib.Path(cert["path"]).parent / file] if file else []
+    files = []
+    pending = [cert["lean"]["module"]]
+    seen = set()
+    while pending:
+        module = pending.pop()
+        if module in seen or not module.startswith("LeapsInBounds.Proofs."):
+            continue
+        seen.add(module)
+        path = FORMAL_DIR / (module.replace(".", "/") + ".lean")
+        if not path.exists():
+            raise CertificateError(f"{cert['id']}: Lean module {module} not found at {path}")
+        files.append(path)
+        pending += LEAN_IMPORT.findall(path.read_text())
+    return sorted(files)
+
+
+def evidence_hash(cert: Mapping[str, Any]) -> str:
+    """SHA-256 of what a certificate claims and its evidence: the fields that
+    say what is being proved and how, and the contents of its evidence files.
+    Other fields, such as notes or an attestation, can change without
+    invalidating a verification."""
+    claim = {field: cert[field] for field in HASHED_FIELDS if field in cert}
+    digest = hashlib.sha256(json.dumps(claim, sort_keys=True, default=str).encode())
+    for path in evidence_files(cert):
+        digest.update(b"\0" + path.as_posix().encode() + b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def load_manifest(path: str | pathlib.Path = MANIFEST_PATH) -> dict[str, dict[str, Any]]:
+    """Load the manifest of verified certificates, keyed by certificate ID."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        return {}
+    with open(path) as file:
+        manifest = yaml.safe_load(file) or {}
+    for cert_id, entry in manifest.items():
+        missing = [field for field in MANIFEST_FIELDS if field not in entry]
+        if missing:
+            raise CertificateError(f"{path}: entry {cert_id} is missing fields {missing}")
+        entry["date"] = str(entry["date"])
+    return manifest
+
+
+def write_manifest(manifest: Mapping[str, Mapping[str, Any]], path: str | pathlib.Path = MANIFEST_PATH) -> None:
+    with open(path, "w") as file:
+        file.write(MANIFEST_HEADER)
+        yaml.dump({k: dict(manifest[k]) for k in sorted(manifest)}, file, sort_keys=False)
+
+
+def certificate_status(cert: Mapping[str, Any], manifest: Mapping[str, Mapping[str, Any]]) -> str:
+    """How a certificate's evidence has been checked:
+
+    - "verified": a trusted verifier checked it, as recorded in the manifest;
+    - "attested": someone else says they checked it with a published checker;
+    - "stale": the manifest has an entry, but the evidence has changed since;
+    - "pending": neither, so it awaits verification.
+    """
+    entry = manifest.get(cert["id"])
+    if entry is not None:
+        if entry["sha256"] == evidence_hash(cert) and entry["verified_by"] in TRUSTED_VERIFIERS:
+            return "verified"
+        return "stale"
+    if "attestation" in cert:
+        return "attested"
+    return "pending"
 
 
 #########
@@ -412,18 +536,68 @@ def complement(adj: list[int]) -> list[int]:
 
 def has_clique(adj: list[int], k: int) -> bool:
     """Check whether a graph has a clique with k vertices."""
-    def extend(candidates: int, needed: int) -> bool:
-        if needed == 0:
-            return True
-        while candidates:
-            if candidates.bit_count() < needed:
-                return False
-            v = candidates.bit_length() - 1
-            candidates &= ~(1 << v)
-            if extend(candidates & adj[v], needed - 1):
-                return True
+    return any(clique_search(adj, candidates, needed) for candidates, needed in clique_roots(adj, k))
+
+
+def clique_roots(adj: list[int], k: int) -> list[tuple[int, int]]:
+    """Searches, as (candidates, needed) pairs, that between them find a
+    k-clique if the graph has one."""
+    if k <= 0:
+        return [(0, 0)]
+    if is_circulant(adj):
+        # Vertex-transitive, so any clique can be moved to contain vertex 0
+        return [(adj[0], k - 1)] if adj else []
+    return [((1 << len(adj)) - 1, k)]
+
+
+def clique_search(adj: list[int], candidates: int, needed: int) -> bool:
+    """Check whether some `needed` vertices among `candidates` form a clique."""
+    if needed <= 1:
+        return needed <= 0 or candidates != 0
+    if candidates.bit_count() < needed:
         return False
-    return extend((1 << len(adj)) - 1, k)
+    return any(clique_search(adj, sub, needed - 1) for sub in clique_branches(adj, candidates, needed))
+
+
+def clique_branches(adj: list[int], candidates: int, needed: int) -> Iterator[int]:
+    """Split the search for a clique of `needed` vertices (at least 2) among
+    `candidates` into searches for `needed - 1` vertices among each yielded set.
+
+    Branch and bound with a greedy colouring bound (Tomita and Seki's MCQ):
+    the candidates are split into colour classes, sets of pairwise
+    non-adjacent vertices, so a clique among them has at most one vertex per
+    class. Vertices are tried in reverse colouring order, each with its
+    neighbours among the candidates not yet tried, and once those (coloured
+    before the current vertex, plus it) use fewer colours than the clique
+    needs, no clique can be completed.
+    """
+    order = []
+    colors = []
+    uncolored = candidates
+    color = 0
+    while uncolored:
+        color += 1
+        available = uncolored
+        while available:
+            low = available & -available
+            v = low.bit_length() - 1
+            available &= ~adj[v] & ~low
+            uncolored &= ~low
+            order.append(v)
+            colors.append(color)
+    for i in range(len(order) - 1, -1, -1):
+        if colors[i] < needed:
+            return
+        v = order[i]
+        yield candidates & adj[v]
+        candidates &= ~(1 << v)
+
+
+def is_circulant(adj: list[int]) -> bool:
+    """Check whether i -> i + 1 (mod n) is an automorphism of the graph."""
+    n = len(adj)
+    full = (1 << n) - 1
+    return all(((adj[i] << 1) | (adj[i] >> (n - 1))) & full == adj[(i + 1) % n] for i in range(n))
 
 
 def bits(mask: int) -> list[int]:
@@ -1546,11 +1720,16 @@ def is_better(bound: str, a: float, b: float) -> bool:
     return a > b if bound == "lower" else a < b
 
 
-def best_certificates(certificates: Mapping[str, Mapping[str, Any]]) -> dict[tuple[str, str], Mapping[str, Any]]:
+def best_certificates(
+    certificates: Mapping[str, Mapping[str, Any]],
+    preferred: Iterable[str] = (),
+) -> dict[tuple[str, str], Mapping[str, Any]]:
     """Find the strongest certificate for each (constant, bound) pair.
-    Ties go to the earliest date."""
+    Ties go to certificates whose IDs are in preferred (such as verified
+    ones), then to the earliest date."""
+    preferred = set(preferred)
     best = {}
-    for cert in sorted(certificates.values(), key=lambda c: c["date"]):
+    for cert in sorted(certificates.values(), key=lambda c: (c["id"] not in preferred, c["date"])):
         key = (cert["constant"], cert["bound"])
         if key not in best or is_better(cert["bound"], cert["approx"], best[key]["approx"]):
             best[key] = cert
